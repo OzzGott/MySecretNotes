@@ -1,5 +1,6 @@
 import json, sqlite3, click, functools, os, hashlib,time, random, sys
 from flask import Flask, current_app, g, session, redirect, render_template, url_for, request
+from werkzeug.security import check_password_hash, generate_password_hash
 
 
 
@@ -11,8 +12,8 @@ def connect_db():
 
 def init_db():
     """Initializes the database with our great SQL schema"""
-    conn = connect_db()
-    db = conn.cursor()
+    db = connect_db()
+    conn = db.cursor()
     db.executescript("""
 
 DROP TABLE IF EXISTS users;
@@ -32,12 +33,15 @@ CREATE TABLE users (
     password TEXT NOT NULL
 );
 
-INSERT INTO users VALUES(null,"admin", "password");
-INSERT INTO users VALUES(null,"bernardo", "omgMPC");
 INSERT INTO notes VALUES(null,2,"1993-09-23 10:10:10","hello my friend",1234567890);
 INSERT INTO notes VALUES(null,2,"1993-09-23 12:10:10","i want lunch pls",1234567891);
 
 """)
+    db.execute("INSERT INTO users VALUES(null,?,?)", ("admin", generate_password_hash("password")))
+    db.execute("INSERT INTO users VALUES(null,?,?)", ("bernardo", generate_password_hash("omgMPC")))
+    db.commit()
+    db.close()
+    
 
 
 
@@ -113,19 +117,20 @@ def login():
         password = request.form['password']
         db = connect_db()
         c = db.cursor()
-        statement = "SELECT * FROM users WHERE username = ? AND password = ?;"
-        c.execute(statement, (username, password))
+        c.execute("SELECT * FROM users WHERE username = ?;", (username,))
         result = c.fetchall()
+        db.close()
 
-        if len(result) > 0:
+        # columns: id=0, username=1, password=2
+        if len(result) > 0 and check_password_hash(result[0][2], password):
             session.clear()
             session['logged_in'] = True
             session['userid'] = result[0][0]
-            session['username']=result[0][1]
+            session['username'] = result[0][1]
             return redirect(url_for('index'))
         else:
             error = "Wrong username or password!"
-    return render_template('login.html',error=error)
+    return render_template('login.html', error=error)
 
 
 @app.route("/register/", methods=('GET', 'POST'))
@@ -133,44 +138,34 @@ def register():
     errored = False
     usererror = ""
     passworderror = ""
-    if request.method == 'POST':
-        
 
+
+    if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
         db = connect_db()
         c = db.cursor()
-        pass_statement = """SELECT * FROM users WHERE password = ?;"""
-        user_statement = """SELECT * FROM users WHERE username = ?;"""
-        c.execute(pass_statement, (password,))
-        if(len(c.fetchall())>0):
-            errored = True
-            passworderror = "That password is already in use by someone else!"
 
-        c.execute(user_statement, (username,))
-        if(len(c.fetchall())>0):
+        c.execute("SELECT * FROM users WHERE username = ?;", (username,))
+        if len(c.fetchall()) > 0:
             errored = True
             usererror = "That username is already in use by someone else!"
 
-        if(not errored):
-            statement = """INSERT INTO users(id,username,password) VALUES(null,?,?);"""
-            print(statement)
-            c.execute(statement, (username,password))
+        if not password or len(password) < 6:
+            errored = True
+            passworderror = "Password must be at least 6 characters long!"
+
+        if not errored:
+            pw_hash = generate_password_hash(password)
+            c.execute("INSERT INTO users(id,username,password) VALUES(null,?,?);", (username, pw_hash))
             db.commit()
             db.close()
             return f"""<html>
-                        <head>
-                            <meta http-equiv="refresh" content="2;url=/" />
-                        </head>
-                        <body>
-                            <h1>SUCCESS!!! Redirecting in 2 seconds...</h1>
-                        </body>
-                        </html>
-                        """
-        
-        db.commit()
+                        <head><meta http-equiv="refresh" content="2;url=/" /></head>
+                        <body><h1>SUCCESS!!! Redirecting in 2 seconds...</h1></body>
+                        </html>"""
         db.close()
-    return render_template('register.html',usererror=usererror,passworderror=passworderror)
+    return render_template('register.html', usererror=usererror, passworderror=passworderror)
 
 
 @app.route("/logout/")
